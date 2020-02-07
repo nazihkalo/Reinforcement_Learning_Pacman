@@ -4,3 +4,6 @@
 
 
  
+ 
+#### Scores from Custom Pacman Environment Test
+![image](minipacman_test/images/test_scores.png)
