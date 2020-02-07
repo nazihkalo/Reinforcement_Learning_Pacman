@@ -4,3 +4,4 @@
 
 
  
+![image](minipacman_test/images/test_scores.png)
