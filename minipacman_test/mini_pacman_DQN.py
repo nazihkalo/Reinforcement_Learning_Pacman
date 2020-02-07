@@ -8,6 +8,8 @@ import os
 import gc
 import gym
 import json
+from collections import deque
+
 
 from keras.models import Sequential, clone_model
 from keras.layers import Dense, InputLayer, Flatten, Conv2D, InputLayer
@@ -20,7 +22,7 @@ import matplotlib.pyplot as plt
 plt.rcParams['figure.figsize'] = (9, 9)
 
 ## READING IN THE CUSTOM PACMAN ENVIRONMENT AND INSTANTIATING IT
-
+from mini_pacman import test, random_strategy, naive_strategy, PacmanGame
 with open('minipacman_test/test_params.json', 'r') as file:
     read_params = json.load(file)
 game_params = read_params['params']
@@ -38,7 +40,7 @@ def create_dqn_model(input_shape, nb_actions, dense_layers, dense_units):
     return model
 
 # Compile the online network using Adam optimizer and loss function of type `mse`.
-input_shape = (len(list(obs['player']) + list(sum(obs['monsters'], ())) + list(sum(obs['diamonds'], ())) + list(sum(obs['walls'], ()))),)
+input_shape = (32,)
 nb_actions = 9
 dense_layers = 5
 dense_units = 256
@@ -72,7 +74,7 @@ def custom_strategy(obs):
 
 #Set global variables necessary for the learning process.
 name = 'MsPacman_DQN'  # used in naming files (weights, logs, etc)
-n_steps = 2000        # total number of training steps (= n_epochs)
+n_steps = 2_000_000        # total number of training steps (= n_epochs)
 warmup = 1000          # start training after warmup iterations
 training_interval = 4  # period (in actions) between training steps
 save_steps = int(n_steps/10)  # period (in training steps) between storing weights to file
@@ -80,7 +82,7 @@ copy_steps = 100       # period (in training steps) between updating target_netw
 gamma = 0.9            # discount rate
 skip_start = 90        # skip the start of every game (it's just freezing time before game starts)
 batch_size = 64        # size of minibatch that is taken randomly from replay memory every training step
-double_dqn = False     # whether to use Double-DQN approach or simple DQN (see above)
+double_dqn = True     # whether to use Double-DQN approach or simple DQN (see above)
 
 # eps-greedy parameters: we slowly decrease epsilon from eps_max to eps_min in eps_decay_steps
 eps_max = 1.0
@@ -134,7 +136,6 @@ if __name__ == '__main__':
         # Play:
         obs = env.make_action(action) # make action and get results
         reward = obs['reward']
-        score += reward
         
         if obs['end_game']:
             episode_scores.append(obs['total_score'])
