@@ -286,7 +286,7 @@ def preprocess(start_state):
 
 
 def test(strategy, log_file='test_pacman_log.json'):
-    with open('test_params.json', 'r') as file:
+    with open('minipacman_test/test_params.json', 'r') as file:
         read_params = json.load(file)
 
     game_params = read_params['params']
