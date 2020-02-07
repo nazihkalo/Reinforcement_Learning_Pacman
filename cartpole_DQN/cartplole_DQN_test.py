@@ -12,7 +12,7 @@ from keras.callbacks import CSVLogger, TensorBoard
 import keras.backend as K
 
 env = gym.make("CartPole-v0")
-dqn_model = load_model('saved_dqn_model.h5')
+dqn_model = load_model('cartpole_DQN/saved_dqn_model.h5')
 
 
 def test_dqn(env, n_games, model, nb_actions, eps=0.05, render=False, sleep_time=0.01):
