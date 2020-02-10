@@ -8,11 +8,12 @@ import tensorflow as tf
 from collections import deque
 import time
 import random
-#from tqdm import tqdm
+from tqdm import tqdm
 import os
 from PIL import Image
 import cv2
 import gym
+
 
 
 DISCOUNT = 0.99
@@ -25,7 +26,8 @@ MIN_REWARD = -200  # For model save
 MEMORY_FRACTION = 0.20
 
 # Environment settings
-EPISODES = 20_000
+EPISODES = 100
+skip_start = 90        # skip the start of every game (it's just freezing time before game starts)
 
 # Exploration settings
 epsilon = 1  # not a constant, going to be decayed
@@ -183,10 +185,11 @@ class DQNAgent:
 agent = DQNAgent()
 
 # Iterate over episodes
-for episode in range(1, EPISODES + 1): #tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
+for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
 
     # Update tensorboard step every episode
     agent.tensorboard.step = episode
+    
 
     # Restarting episode - reset episode reward and step number
     episode_reward = 0
@@ -194,6 +197,9 @@ for episode in range(1, EPISODES + 1): #tqdm(range(1, EPISODES + 1), ascii=True,
 
     # Reset environment and get initial state
     current_state = env.reset()
+    for skip in range(skip_start):  # skip the start of each game (it's just freezing time before game starts)
+        current_state, reward, done, info = env.step(0)
+        episode_reward += reward
 
     # Reset flag and start iterating until episode ends
     done = False

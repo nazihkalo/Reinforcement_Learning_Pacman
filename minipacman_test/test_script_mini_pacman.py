@@ -37,32 +37,32 @@ def custom_strategy(obs):
 # from mini_pacman import test, random_strategy, naive_strategy
 # random_med = test(strategy=random_strategy, log_file='test_pacman_log_random.json')
 # naive_med = test(strategy=naive_strategy, log_file='test_pacman_log_naive.json')
-custom_med = test(strategy=custom_strategy, log_file='test_pacman_log_custom.json')
+# custom_med = test(strategy=custom_strategy, log_file='test_pacman_log_custom.json')
 
 
 # print(f'Random Median = {random_med} Naive Median = {naive_med} Custom Median = {custom_med}')
 
 
-# ####### RENDERING TO SEE PERFORMANCE####
-# episode_history = []
-# total_history= []
-# total_scores = []
+####### RENDERING TO SEE PERFORMANCE####
+episode_history = []
+total_history= []
+total_scores = []
 
-# for game in range(10):
-#     print(f"Game {game}, let's go!")
-#     obs = env.reset()
-#     episode_history.append(obs)
-#     while not obs['end_game']:
-#         action = custom_strategy(obs)
-#         obs = env.make_action(action)
-#         episode_history.append(obs)
-#         env.render()
-#         time.sleep(0.05)
+for game in range(10):
+    print(f"Game {game}, let's go!")
+    obs = env.reset()
+    episode_history.append(obs)
+    while not obs['end_game']:
+        action = custom_strategy(obs)
+        obs = env.make_action(action)
+        episode_history.append(obs)
+        env.render()
+        time.sleep(0.1)
 
-#     total_history.append(episode_history)
-#     total_scores.append(obs['total_score'])
-# mean_score = np.mean(total_scores)
-# median_score = np.median(total_scores)
+    total_history.append(episode_history)
+    total_scores.append(obs['total_score'])
+mean_score = np.mean(total_scores)
+median_score = np.median(total_scores)
 
-# print("Your average score is {}, median is {}. "
-#         "Do not forget to upload it for submission!".format(mean_score, median_score))
+print("Your average score is {}, median is {}. "
+        "Do not forget to upload it for submission!".format(mean_score, median_score))
