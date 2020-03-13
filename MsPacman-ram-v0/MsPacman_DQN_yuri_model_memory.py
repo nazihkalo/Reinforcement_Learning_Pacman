@@ -14,7 +14,7 @@ from keras.layers import Dense, Flatten, Conv2D, InputLayer
 from keras.callbacks import CSVLogger, TensorBoard
 from keras.optimizers import Adam
 import keras.backend as K
-
+from tqdm import tqdm
 import gym
 
 plt.rcParams['figure.figsize'] = (9, 9)
@@ -43,7 +43,7 @@ def epsilon_greedy(q_values, epsilon, n_outputs):
 
 ###### #### online_network.compile(optimizer=Adam(learning_rate), loss='mse', metrics=[mean_q, 'mse'])
 
-input_shape = (4, env.reset().shape[0])
+input_shape = (env.reset().shape[0]*4,)#(4, env.reset().shape[0])
 nb_actions = env.action_space.n  # 9
 dense_layers = 5
 dense_units = 256
@@ -65,12 +65,12 @@ replay_memory = deque([], maxlen=replay_memory_maxlen)
 
 
 name = 'MsPacman-ram-v0'  # used in naming files (weights, logs, etc)
-MODEL_NAME = '6Layer_256Neuron'
-n_steps = 10_000        # total number of training steps (= n_epochs)
-warmup = 1_000         # start training after warmup iterations
+MODEL_NAME = '5Layer_256Neuron'
+n_steps = 3_000_000        # total number of training steps (= n_epochs)
+warmup = 10_000         # start training after warmup iterations
 training_interval = 4  # period (in actions) between training steps
-save_steps = int(n_steps/20)  # period (in training steps) between storing weights to file
-copy_steps = 1_00       # period (in training steps) between updating target_network weights
+save_steps = int(n_steps/10)  # period (in training steps) between storing weights to file
+copy_steps = 1_000       # period (in training steps) between updating target_network weights
 gamma = 0.85            # discount rate
 skip_start = 90        # skip the start of every game (it's just freezing time before game starts)
 batch_size = 64        # size of minibatch that is taken randomly from replay memory every training step
@@ -104,12 +104,14 @@ episode_scores = []  # collect total scores in this list and log it later
 
 #Training window - number of frames to train & predict on 
 obs_window_maxlen = 4
+data_holder = []
+pbar = tqdm(total = n_steps+1)
 
 while step < n_steps:
     if done:  # game over, restart it
         obs = env.reset()
         obs_window_deque = deque([obs]*4, maxlen=obs_window_maxlen)
-        obs_window_full = np.array(obs_window_deque).reshape(1,4,128)
+        obs_window_full = np.array([obs_window_deque]).ravel()#.reshape(1,4,128)
         score = 0  # reset score for current episode
         for skip in range(skip_start):  # skip the start of each game (it's just freezing time before game starts)
             obs, reward, done, info = env.step(0)
@@ -119,14 +121,14 @@ while step < n_steps:
 
     # Online network evaluates what to do
     iteration += 1
-    q_values = online_network.predict(obs_window_full)[0]  # calculate q-values using online network
+    q_values = online_network.predict(np.array([obs_window_full]))[0]  # calculate q-values using online network
     # select epsilon (which linearly decreases over training steps):
     epsilon = max(eps_min, eps_max - (eps_max-eps_min) * step/eps_decay_steps)
     action = epsilon_greedy(q_values, epsilon, nb_actions)
     # Play:
     next_state, reward, done, info = env.step(action)
     obs_window_deque.append(next_state)
-    new_state_full = np.array(obs_window_deque).reshape(1,4,128)
+    new_state_full = np.array(obs_window_deque).ravel()#.reshape(1,4,128)
 
     score += reward
     # Let's memorize what just happened
@@ -140,6 +142,7 @@ while step < n_steps:
     if iteration >= warmup and iteration % training_interval == 0:
         # learning branch
         step += 1
+        pbar.update(1)
         minibatch = random.sample(replay_memory, batch_size)
         replay_state = np.array([x[0] for x in minibatch])
         replay_action = np.array([x[1] for x in minibatch])
@@ -162,8 +165,8 @@ while step < n_steps:
         target[np.arange(batch_size), replay_action] = target_for_action  #...except for targets with actions from replay
         
         # Train online network
-        online_network.fit(replay_state, target, epochs=step, verbose=2, initial_epoch=step-1,
-                           callbacks=[csv_logger, tensorboard]) #TENSORBOARD TAKEN OUT
+        online_network.fit(replay_state, target, epochs=step, verbose=0, initial_epoch=step-1,
+                           callbacks=[csv_logger]) #TENSORBOARD TAKEN OUT
         # Periodically copy online network weights to target network
         if step % copy_steps == 0:
             target_network.set_weights(online_network.get_weights())
@@ -174,9 +177,12 @@ while step < n_steps:
             average_reward = sum(episode_scores[-AGGREGATE_STATS_EVERY:])/len(episode_scores[-AGGREGATE_STATS_EVERY:])
             min_reward = min(episode_scores[-AGGREGATE_STATS_EVERY:])
             max_reward = max(episode_scores[-AGGREGATE_STATS_EVERY:])
-            tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+            print("Episode: {}, Steps:{}, 50-Average: {}, Max:{} , Min:{}, Epsilon:{}".format(episodes, step, average_reward, max_reward, min_reward, epsilon))
+            data_holder.append([episodes, step, average_reward, max_reward, min_reward, epsilon])
 
 
         if step % save_steps == 0:
             online_network.save_weights(os.path.join(weights_folder, 'weights_step{}_avg{}_t{}.h5f'.format(step, average_reward,datetime.now().strftime('%Y-%m-%d-%H:%M:%S'))))
+            np.save(os.path.join(weights_folder,'{}step_{}episode_time{}.h5'.format(step,episodes, datetime.now().strftime('%Y-%m-%d-%H:%M:%S'))),data_holder)
             gc.collect()  # also clean the garbage
+pbar.close()

@@ -1,0 +1,350 @@
+import numpy as np
+import keras.backend.tensorflow_backend as backend
+from keras.models import Sequential, load_model
+from keras.layers import Dense, InputLayer, Flatten, Conv2D
+from keras.optimizers import Adam
+from keras.callbacks import TensorBoard
+import tensorflow as tf
+from collections import deque
+import time
+import random
+from tqdm import tqdm
+import os
+from PIL import Image
+import cv2
+import gym
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+DISCOUNT = 0.999
+REPLAY_MEMORY_SIZE = 50_000  # How many last steps to keep for model training
+MIN_REPLAY_MEMORY_SIZE = 1_000  # Minimum number of steps in a memory to start training
+MINIBATCH_SIZE = 256  # How many steps (samples) to use for training
+UPDATE_TARGET_EVERY = 5  # Terminal states (end of episodes)
+MODEL_NAME = '5Layer_256Neuron'
+MIN_REWARD = 500  # For model save
+MEMORY_FRACTION = 0.20
+
+# Environment settings
+EPISODES = 5000
+skip_start = 90        # skip the start of every game (it's just freezing time before game starts)
+
+# Exploration settings
+epsilon = 1  # not a constant, going to be decayed
+EPSILON_DECAY = 0.99975
+MAX_EPSILON = 1
+MIN_EPSILON = 0.001
+
+#  Stats settings
+AGGREGATE_STATS_EVERY = 50  # episodes
+SHOW_PREVIEW = False
+double_dqn = True
+
+env = gym.make("MsPacman-ram-v0")
+input_shape = env.reset().shape
+
+# For stats
+ep_rewards = [-200]
+
+# For more repetitive results
+random.seed(1)
+np.random.seed(1)
+tf.set_random_seed(1)
+
+# Memory fraction, used mostly when trai8ning multiple agents
+#gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION)
+#backend.set_session(tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)))
+
+# Create models folder
+if not os.path.isdir('models'):
+    os.makedirs('models')
+
+# Own Tensorboard class
+class ModifiedTensorBoard(TensorBoard):
+
+    # Overriding init to set initial step and writer (we want one log file for all .fit() calls)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.step = 1
+        self.writer = tf.summary.FileWriter(self.log_dir)
+
+    # Overriding this method to stop creating default log writer
+    def set_model(self, model):
+        pass
+
+    # Overrided, saves logs with our step number
+    # (otherwise every .fit() will start writing from 0th step)
+    def on_epoch_end(self, epoch, logs=None):
+        self.update_stats(**logs)
+
+    # Overrided
+    # We train for one batch only, no need to save anything at epoch end
+    def on_batch_end(self, batch, logs=None):
+        pass
+
+    # Overrided, so won't close writer
+    def on_train_end(self, _):
+        pass
+
+    # Custom method for saving own metrics
+    # Creates writer, writes custom metrics and closes writer
+    def update_stats(self, **stats):
+        self._write_logs(stats, self.step)
+
+
+def save_plot(indexes, metric):
+    plt.plot(indexes, metric, 'g-')
+    plt.title('Learning Curve')
+    plt.xlabel('Episodes')
+    plt.ylabel('{}'.format(str(metric)))
+    plt.legend(['DQN'], loc='best')
+    plt.savefig("models/learn_curve.png")
+
+import heapq
+import numpy as np
+from itertools import count
+from collections import deque
+tiebreaker = count()
+
+class PER():
+    """ Prioritized replay memory using binary heap """
+    def __init__(self, max_size=10000):
+        self.max_size = max_size
+        self.memory = []
+
+    def add(self, transition, TDerror):
+        heapq.heappush(self.memory, (-TDerror, next(tiebreaker), transition))
+        if self.size() > self.max_size:
+            self.memory = self.memory[:-1]
+        heapq.heapify(self.memory)
+    
+    def batch(self, n):
+        batch = heapq.nsmallest(n, self.memory)
+        batch = [e for (_, _, e) in batch]
+        self.memory = self.memory[n:]
+        return batch
+
+    def size(self):
+        return len(self.memory)
+
+    def is_full(self):
+        return True if self.size() >= self.max_size else False
+
+# Agent class
+class DQNAgent:
+    def __init__(self):
+
+        # Main model
+        model_path = '5Layer_256Neuron__2160.00max__620.40avg__150.00min__2020.03.02.09.06.21.model'
+        # Create models folder
+        if os.path.exists(os.path.join(os.getcwd(),'models',model_path)):
+            print('Loading old model weights 2')
+            self.model = self.create_model()
+            self.model.load_weights(((os.path.join(os.getcwd(),'models',model_path))))
+        else:
+            print('No model found. Creating new model')
+            self.model = self.create_model()
+
+        # Target network
+        self.target_model = self.create_model()
+        self.target_model.set_weights(self.model.get_weights())
+
+        # An array with last n steps for training
+       
+        #self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
+        self.memory_size = REPLAY_MEMORY_SIZE
+        self.replay_memory = PER(self.memory_size)
+
+        # Custom tensorboard object
+        self.tensorboard = ModifiedTensorBoard(log_dir="logs/{}-{}".format(MODEL_NAME, datetime.now().strftime('%Y.%m.%d.%H.%M.%S')))
+
+        # Used to count when to update target network with main network's weights
+        self.target_update_counter = 0
+   
+    def create_model(self, input_shape = input_shape, nb_actions = env.action_space.n, dense_layers = 5, dense_units = 256):
+        model = Sequential()
+        model.add(InputLayer(input_shape))
+        for i in range(dense_layers):
+            model.add(Dense(units=dense_units, activation='relu'))
+        model.add(Dense(nb_actions, activation='linear'))
+        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=['accuracy'])
+        return model
+
+    # Adds step's data to a memory replay array
+    # (observation space, action, reward, new observation space, done)
+    def update_replay_memory(self, transition, TDerror):
+        self.replay_memory.add([transition], TDerror)
+    
+    def predict(self, X, target_network=False):
+        NN = self.target_model if target_network else self.model
+        y = NN.predict(X, batch_size=1)[0]
+        A = np.argmax(y)
+        return y, A
+
+    def learn_single(self, S, A, R, S_p, terminal, fit=True):
+        # predict Q-values for starting state using the main network
+        y, _ = self.predict(S.reshape(1,128))
+        y_old = np.array(y)
+
+        # predict best action in ending state using the main network
+        _, A_p = self.predict(S_p.reshape(1,128))
+
+        # predict Q-values for ending state using the target network
+        y_target, _ = self.predict(S_p.reshape(1,128), target_network=True)
+
+        # if fit:
+        #     self.avg_q_add(y[A])
+
+        # update Q[S, A]
+        if terminal:
+            y[A] = R
+        else:
+            y[A] = R + DISCOUNT * y_target[A_p]
+
+        return y_old, y
+    
+    def compute_TDerror(self, transition):
+        S, A, R, S_p, terminal = transition
+        y_old, y = self.learn_single(S, A, R, S_p, terminal)
+        TDerror = np.abs(y_old[A]-y[A])
+        return TDerror    
+
+    # Trains main network every step during episode
+    def train(self, terminal_state, step):
+
+        # Start training only if certain number of samples is already saved
+        #if len(self.replay_memory) < MIN_REPLAY_MEMORY_SIZE:
+        if not self.replay_memory.is_full():
+            return
+
+        # Get a minibatch of random samples from memory replay table
+        minibatch = self.replay_memory.batch(MINIBATCH_SIZE)
+        #minibatch = random.sample(self.replay_memory, MINIBATCH_SIZE)
+        # Get current states from minibatch, then query NN model for Q values
+        replay_state = [i for i, _, _, _,_ in minibatch] 
+        replay_action = [i for _, i, _, _,_ in minibatch] 
+        replay_rewards = [i for _, _, i, _,_ in minibatch] 
+        replay_next_state = [i for _, _, _, i,_ in minibatch] 
+        replay_done = [i for _, _, _, _, i in minibatch] 
+        # replay_state = np.array([x[0] for x in minibatch])
+        # replay_action = np.array([x[1] for x in minibatch])
+        # replay_rewards = np.array([x[2] for x in minibatch])
+        # replay_next_state = np.array([x[3] for x in minibatch])
+        # replay_done = np.array([x[4] for x in minibatch], dtype=int)
+
+        # calculate targets (see above for details)
+        if double_dqn == False:
+            # DQN
+            target_for_action = replay_rewards + (1-replay_done) * DISCOUNT * \
+                                    np.amax(self.target_model.predict(replay_next_state), axis=1)
+        else:
+            # Double DQN
+            best_actions = np.argmax(self.model.predict(replay_next_state), axis=1)
+            target_for_action = replay_rewards + (1-replay_done) * DISCOUNT * \
+                                    self.target_model.predict(replay_next_state)[np.arange(MINIBATCH_SIZE), best_actions]
+
+        target = self.model.predict(replay_state)  # targets coincide with predictions ...
+
+        target[np.arange(MINIBATCH_SIZE), replay_action] = target_for_action  #...except for targets with actions from replay
+        # Train online network
+        self.model.fit(replay_state, target, 
+                        batch_size=MINIBATCH_SIZE, 
+                        verbose=0, 
+                        shuffle=False, 
+                        callbacks=[self.tensorboard] if terminal_state else None)
+        #epochs=step, verbose=2, initial_epoch=step-1,
+        #callbacks=[csv_logger, tensorboard]) #TENSORBOARD TAKEN OUT
+
+        for item in minibatch:
+                self.replay_memory.add(item, self.compute_TDerror(item))
+
+
+        # Update target network counter every episode
+        if terminal_state:
+            self.target_update_counter += 1
+
+        # If counter reaches set value, update target network with weights of main network
+        if self.target_update_counter > UPDATE_TARGET_EVERY:
+            self.target_model.set_weights(self.model.get_weights())
+            self.target_update_counter = 0
+
+    # Queries main network for Q values given current observation space (environment state)
+    def get_qs(self, state):
+        return self.model.predict(np.array(state).reshape(-1, *state.shape)/255)[0]
+    
+
+
+agent = DQNAgent()
+
+# Iterate over episodes
+for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
+
+    # Update tensorboard step every episode
+    agent.tensorboard.step = episode
+    
+
+    # Restarting episode - reset episode reward and step number
+    episode_reward = 0
+    step = 1
+
+    # Reset environment and get initial state
+    current_state = env.reset()
+    for skip in range(skip_start):  # skip the start of each game (it's just freezing time before game starts)
+        current_state, reward, done, info = env.step(0)
+        episode_reward += reward
+
+    # Reset flag and start iterating until episode ends
+    done = False
+    while not done:
+
+        # This part stays mostly the same, the change is to query a model for Q values
+        if np.random.random() > epsilon:
+            # Get action from Q table
+            action = np.argmax(agent.get_qs(current_state))
+        else:
+            # Get random action
+            action = np.random.randint(0, env.action_space.n)
+
+        new_state, reward, done, info = env.step(action)
+
+        # Transform new continous state to new discrete state and count reward
+        episode_reward += reward
+
+        if SHOW_PREVIEW and not episode % AGGREGATE_STATS_EVERY:
+            env.render()
+
+        # Every step we update replay memory and train main network
+        transition = (current_state, action, reward, new_state, done)
+        agent.update_replay_memory(transition, agent.compute_TDerror(transition))
+        #agent.memory.add([current_state, action, reward, new_state, done], )
+        agent.train(done, step)
+        
+
+        current_state = new_state
+        step += 1
+
+    # Append episode reward to a list and log stats (every given number of episodes)
+    ep_rewards.append(episode_reward)
+    save_plot(list(range(len(ep_rewards))), ep_rewards)
+    if not episode % AGGREGATE_STATS_EVERY or episode == 1:
+        average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
+        min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
+        max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
+        save_plot(episode, average_reward)
+        agent.tensorboard.update_stats(reward_avg=average_reward, 
+                                        reward_min=min_reward, 
+                                        reward_max=max_reward, 
+                                        epsilon=epsilon,
+                                        episode_reward = episode_reward)
+        time_now = datetime.now().strftime('%Y.%m.%d.%H.%M.%S')
+        agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{time_now}.model')
+        
+        # Save model, but only when average_reward is greater or equal a set value
+        if average_reward >= MIN_REWARD:
+            agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{time_now}.model')
+
+    # Decay epsilon
+    if epsilon > MIN_EPSILON:
+        # epsilon *= EPSILON_DECAY
+        # epsilon = max(MIN_EPSILON, epsilon)
+        epsilon = max(MIN_EPSILON, MAX_EPSILON - (MAX_EPSILON-MIN_EPSILON) * (episode/(0.75*EPISODES)))

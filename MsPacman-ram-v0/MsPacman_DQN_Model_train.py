@@ -165,6 +165,7 @@ class DQNAgent:
             X.append(current_state)
             y.append(current_qs)
 
+
         # Fit on all samples as one batch, log only on terminal state
         self.model.fit(np.array(X)/255, np.array(y), batch_size=MINIBATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if terminal_state else None)
 
@@ -244,3 +245,38 @@ for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
     if epsilon > MIN_EPSILON:
         epsilon *= EPSILON_DECAY
         epsilon = max(MIN_EPSILON, epsilon)
+
+
+# calculate targets (see above for details)
+        if double_dqn == False:
+            # DQN
+            target_for_action = replay_rewards + (1-replay_done) * gamma * \
+                                    np.amax(target_network.predict(replay_next_state), axis=1)
+        else:
+            # Double DQN
+            best_actions = np.argmax(online_network.predict(replay_next_state), axis=1)
+            target_for_action = replay_rewards + (1-replay_done) * gamma * \
+                                    target_network.predict(replay_next_state)[np.arange(batch_size), best_actions]
+
+        target = online_network.predict(replay_state)  # targets coincide with predictions ...
+        target[np.arange(batch_size), replay_action] = target_for_action  #...except for targets with actions from replay
+        
+        # Train online network
+        online_network.fit(replay_state, target, epochs=step, verbose=2, initial_epoch=step-1,
+                           callbacks=[csv_logger, tensorboard]) #TENSORBOARD TAKEN OUT
+        # Periodically copy online network weights to target network
+        if step % copy_steps == 0:
+            target_network.set_weights(online_network.get_weights())
+        # And save weights
+        
+        average_reward = 0
+        if episodes % AGGREGATE_STATS_EVERY == 0:
+            average_reward = sum(episode_scores[-AGGREGATE_STATS_EVERY:])/len(episode_scores[-AGGREGATE_STATS_EVERY:])
+            min_reward = min(episode_scores[-AGGREGATE_STATS_EVERY:])
+            max_reward = max(episode_scores[-AGGREGATE_STATS_EVERY:])
+            tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
+
+
+        if step % save_steps == 0:
+            online_network.save_weights(os.path.join(weights_folder, 'weights_step{}_avg{}_t{}.h5f'.format(step, average_reward or 0,datetime.now().strftime('%Y-%m-%d-%H:%M:%S'))))
+            gc.collect()  # also clean the garbage
