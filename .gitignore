@@ -291,3 +291,4 @@ minipacman_test/tensorboard/events.out.tfevents.1581089003.midway2-0605.rcc.loca
 minipacman_test/tensorboard/events.out.tfevents.1581089034.midway2-0605.rcc.local
 minipacman_test/tensorboard/events.out.tfevents.1581089086.midway2-0605.rcc.local
 minipacman_test/tensorboard/events.out.tfevents.1581089105.midway2-0605.rcc.local
+*.mov
